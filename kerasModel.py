@@ -11,9 +11,9 @@ import matplotlib.pyplot as plt
 import sys
 
 #Load in the datasets for training and compiling the sample weights
-with h5py.File('/data/t3home000/aidandc/trainingDataHHThreeV.h5', 'r') as hf:
+with h5py.File('/data/t3home000/aidandc/trainingDataver3.h5', 'r') as hf:
     dataset = hf["Training Data"][:]
-with h5py.File('/data/t3home000/aidandc/sampleDataHHThreeV.h5', 'r') as hf:
+with h5py.File('/data/t3home000/aidandc/sampleDataver3.h5', 'r') as hf:
     sampleData = hf["Sample Data"][:]
 
 #Separate datasets into inputs and outputs, expand the dimensions of the inputs to be used with Conv1D layers
