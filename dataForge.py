@@ -1,35 +1,28 @@
-import json, math
-import ROOT, sys, os, re, string
+import time
+
+start = time.time()
+
+import ROOT, sys
 from ROOT import *
 import numpy
 import h5py
-from numpy import asarray
-from numpy import savetxt
-import math
 
-#Loads in the input ROOT File from which to load the TTree, the filename for the datasets, pT cuts on jets, training/testing split, and particle candidate choice
+#Customizable inputs, pT cut is applied to individual jets, data/file tag helps label output dataset files
 if len(sys.argv)!=6 or (int(sys.argv[4])<0 or int(sys.argv[4])>100) or (int(sys.argv[5])!=0 and int(sys.argv[5])!=1):
-	print("USAGE: <input file> <date/file tag> <pT cut> <percent ratio of training/testing data (0-100)> <candidates (0 for PF, 1 for PUPPI)>")
+	print("USAGE: <input ROOT file> <data/file tag> <pT cut> <percent ratio of training/testing data (0-100)> <candidates (0 for PF, 1 for PUPPI)>")
 	sys.exit(1)
 
-#Loads the TTree from the ROOT File and selects the appropriate objects (either PF or PUPPI candidates)
+ROOT.gROOT.SetBatch(1)
+
 inFileName = sys.argv[1]
 print("Reading from "+str(inFileName))
+
 inFile = ROOT.TFile.Open(inFileName,"READ")
+
 tree = inFile.Get("ntuple0/objects")
 ver = inFile.Get("ntuple0/objects/vz")
-if sys.argv[5]==0:
-	obj = inFile.Get("ntuple0/objects/pf")
-	verPf = inFile.Get("ntuple0/objects/pf_vz")
-	verPfX = inFile.Get("ntuple0/objects/pf_vx")
-	verPfY = inFile.Get("ntuple0/objects/pf_vy")
-if sys.argv[5]==1:
-	obj = inFile.Get("ntuple0/objects/pup")
-	verPup = inFile.Get("ntuple0/objects/pup_vz")
-	verPupX = inFile.Get("ntuple0/objects/pup_vx")
-	verPupY = inFile.Get("ntuple0/objects/pup_vy")
 
-#Initializing all the lists needed throughout the jet reconstruction
+#Load variables based on inputs and initialize lists to be used later
 eventNum = tree.GetEntries()
 pTCut = float(sys.argv[3])
 jetList = []
@@ -41,47 +34,29 @@ trainArray = []
 testArray = []
 jetFullData = []
 trainingFullData = []
-totalPartCount = 10
-chargedHadrons = [211,-211]
-bQTrainCount = 0
-hasBQC = 0
-unknowncount = 0
-'''
-Typically unused lists but previously helpful for separating jets into distinct pT bins and counting the number of signal events in each
-a040 = []
-c040 = 0
-a4080 = []
-c4080 = 0
-a80120 = []
-c80120 = 0
-a120160 = []
-c120160 = 0
-a160200 = []
-c160200 = 0
-'''
 
-#Function used for one hot encoding
+#One-Hot Encoding for Particle Type
 def scalePartType(a, n):
 	if n==11:
-		a.extend((1,0,0,0,0,0,0,0))
+		a.extend((1,0,0,0,0,0,0,0)) #Electron
 	elif n==-11:
-		a.extend((0,1,0,0,0,0,0,0))
+		a.extend((0,1,0,0,0,0,0,0)) #Positron
 	elif n==13:
-		a.extend((0,0,1,0,0,0,0,0))
+		a.extend((0,0,1,0,0,0,0,0)) #Muon
 	elif n==-13:
-		a.extend((0,0,0,1,0,0,0,0))
+		a.extend((0,0,0,1,0,0,0,0)) #Anti-Muon
 	elif n==22:
-		a.extend((0,0,0,0,1,0,0,0))
+		a.extend((0,0,0,0,1,0,0,0)) #Photon
 	elif n==130:
-		a.extend((0,0,0,0,0,1,0,0))
+		a.extend((0,0,0,0,0,1,0,0)) #Neutral Meson
 	elif n==211:
-		a.extend((0,0,0,0,0,0,1,0))
+		a.extend((0,0,0,0,0,0,1,0)) #Pion
 	elif n==-211:
-		a.extend((0,0,0,0,0,0,0,1))
+		a.extend((0,0,0,0,0,0,0,1)) #Anti-Pion
 	else:
-		a.extend((0,0,0,0,0,0,0,0))
+		a.extend((0,0,0,0,0,0,0,0)) #Case for unknown particle
 
-#Function used to normalize phi WRT jet
+#Scaling Phi for particles relative to their jet
 def signedDeltaPhi(phi1, phi2):
     dPhi = phi1 - phi2
     if (dPhi < -numpy.pi):
@@ -92,15 +67,17 @@ def signedDeltaPhi(phi1, phi2):
 
 jetPartsArray = []
 jetDataArray = []
+
 print('Beginning Jet Construction')
-for entryNum in range(10):
-	if entryNum%(int(eventNum/100))==0:
+for entryNum in range(eventNum):
+	if entryNum%(int(eventNum/10))==0:
 		print('Progress: '+str(entryNum)+" out of " + str(eventNum)+", approximately "+str(int(100*entryNum/eventNum))+"%"+" complete.")
 		print('Current No. of Jets: '+str(len(jetPartsArray)))
 		print('Current No. of Signal Jets: '+str(bQuarkCount))
 	tree.GetEntry(entryNum)
 	ver = tree.vz
-	if int(sys.argv[5])==0:
+	#Loading particle candidates based on PF or PUPPI input
+	if int(sys.argv[5])==0: 
 		obj = tree.pf
 		verPf = tree.pf_vz
 		verPfX = tree.pf_vx
@@ -111,48 +88,60 @@ for entryNum in range(10):
 		verPfX = tree.pup_vx
 		verPfY = tree.pup_vy
 	jetNum = 0
+	bannedParts = [] #List of indices of particles that have already been used by previous jets
+	bannedbQuarks = [] #Same deal but with indices within the gen tree corresponding to b quarks
+
+	#Loops through pf/pup candidates
 	for i in range(len(obj)):
 		jetPartList = []
 		seedParticle = []
-		if jetNum>=5:
+		if jetNum>=12: #Limited to 12 jets per event at maximum
 			jetNum = 0
 			break
-		if obj[i][1] in chargedHadrons:
-			tempTLV = obj[i][0]
-			scalePartType(seedParticle,abs(obj[i][1]))
-			seedParticle.extend([verPf[i]-ver[0],verPfX[i],verPfY[i],obj[i][0].Pt(),obj[i][0].Eta(),obj[i][0].Phi()])
-			jetPartList.extend(seedParticle)
+		if i not in bannedParts: #Identifies highest avaiable pT particle to use as seed
+			tempTLV = obj[i][0] #Takes TLorentzVector of seed particle to use for jet reconstruction
+			scalePartType(seedParticle,abs(obj[i][1])) #One-Hot Encoding Seed Particle Type
+			seedParticle.extend([verPf[i]-ver[0],verPfX[i],verPfY[i],obj[i][0].Pt(),obj[i][0].Eta(),obj[i][0].Phi()]) #Add in dZ, dX, dY, Particle Pt, Eta, & Phi, last 3 features to be scaled later
+			jetPartList.extend(seedParticle) #Add particle features to particle list
+			bannedParts.append(i) #Mark this particle as unavailable for other jets
 			for j in range(len(obj)):
 				partFts = []
-				if obj[i][0].DeltaR(obj[j][0])<=0.4 and i!=j:
-					tempTLV=tempTLV+obj[j][0]
-					scalePartType(partFts,obj[j][1])
-					partFts.extend([verPf[j]-ver[0],verPfX[j],verPfY[j],obj[j][0].Pt(),obj[j][0].Eta(),obj[j][0].Phi()])
-					jetPartList.extend(partFts)
-				if len(jetPartList)>=10*14:
+				if obj[i][0].DeltaR(obj[j][0])<=0.4 and i!=j and (j not in bannedParts): #Look for available particles within deltaR<0.4 of seed particle
+					tempTLV=tempTLV+obj[j][0] #Add to tempTLV
+					scalePartType(partFts,obj[j][1]) #One-Hot Encoding Particle Type
+					partFts.extend([verPf[j]-ver[0],verPfX[j],verPfY[j],obj[j][0].Pt(),obj[j][0].Eta(),obj[j][0].Phi()]) #Add in dZ, dX, dY, Particle Pt, Eta, & Phi, last 3 features to be scaled later
+					jetPartList.extend(partFts)  #Add particle features to particle list
+					bannedParts.append(j) #Mark this particle as unavailable for other jets
+				if len(jetPartList)>=10*14: #If you reach 10 particles in one jet, break and move on
 					break
-			if abs(tempTLV.Pt())<pTCut:
+			if abs(tempTLV.Pt())<pTCut: #Neglect to save jet if it falls below pT Cut
 				break
+			#Scaling particle pT, Eta, and Phi based on jet pT, Eta, and Phi
 			c = 11
 			while c<len(jetPartList)-2:
 				jetPartList[c]=jetPartList[c]/tempTLV.Pt()
 				jetPartList[c+1]=jetPartList[c+1]-tempTLV.Eta()
 				tempPhi = jetPartList[c+2]
 				jetPartList[c+2] = signedDeltaPhi(tempPhi,tempTLV.Phi())
-				c+=14			
+				c+=14
+			#Ensure all inputs are same length			
 			while len(jetPartList)<10*14:
 				jetPartList.append(0)
+			#Add in final value to indicate if particle is matched (1) or unmatched (0) to a gen b quark by looking for gen b quarks within deltaR<0.4 of jet
 			jetPartList.append(0)
 			for e in range(len(tree.gen)):
-				if abs(tree.gen[e][1])==5:
+				if abs(tree.gen[e][1])==5 and (e not in bannedbQuarks) and abs(tree.gen[e][0].Eta())<2.3:
 					if tree.gen[e][0].DeltaR(tempTLV)<=0.4:
 						jetPartList[-1]=1
 						bQuarkCount+=1
+						bannedbQuarks.append(e)
 						break
+			#Store particle inputs and jet features in overall list
 			jetPartsArray.append(jetPartList)
 			jetDataArray.append((tempTLV.Pt(),tempTLV.Eta(),tempTLV.Phi(),tempTLV.M()))
 			jetNum+=1
 
+#Break dataset into training/testing data based on train/test split input
 trainTestSplit = int(sys.argv[4])
 splitIndex = int(float(trainTestSplit)/100*len(jetPartsArray))
 trainArray = jetPartsArray[:splitIndex]
@@ -162,20 +151,28 @@ testArray = jetPartsArray[splitIndex:]
 jetFullData = jetDataArray[splitIndex:]
 
 print('Total Jets '+str(len(jetPartsArray)))
-print('Total No. of Signal Jets: '+str(bQuarkCount))
+print('Total No. of Matched Jets: '+str(bQuarkCount))
 print('No. of Jets in Training Data: '+str(len(trainArray)))
 print('No. of Jets in Testing Data: '+str(len(testArray)))
 
+#Final Check
 print('Debug that everything matches up in length:')
 print(len(testArray)==len(jetFullData) and len(trainArray)==len(trainingFullData))
 
-exit()
+#Save datasets as h5 files
 
+#Testing Data: Particle Inputs for each jet of Shape [...,141]
 with h5py.File('testingData'+str(sys.argv[2])+'.h5','w') as hf:
 	hf.create_dataset("Testing Data", data=testArray)
+#Jet Data: Jet Features (pT, Eta, Phi, Mass) of each testing data jet of shape [...,4]
 with h5py.File('jetData'+str(sys.argv[2])+'.h5','w') as hf:
 	hf.create_dataset("Jet Data", data=jetFullData)
+#Training Data: Particle Inputs for each jet of Shape [...,141]
 with h5py.File('trainingData'+str(sys.argv[2])+'.h5','w') as hf:
 	hf.create_dataset("Training Data", data=trainArray)
+#Sample Data: Jet Features (pT, Eta, Phi, Mass) of each training data jet of shape [...,4]
 with h5py.File('sampleData'+str(sys.argv[2])+'.h5','w') as hf:
 	hf.create_dataset("Sample Data", data=trainingFullData)
+
+end = time.time()
+print(str(end-start))
