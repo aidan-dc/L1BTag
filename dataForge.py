@@ -101,7 +101,10 @@ for entryNum in range(eventNum):
 		if i not in bannedParts: #Identifies highest avaiable pT particle to use as seed
 			tempTLV = obj[i][0] #Takes TLorentzVector of seed particle to use for jet reconstruction
 			scalePartType(seedParticle,abs(obj[i][1])) #One-Hot Encoding Seed Particle Type
-			seedParticle.extend([verPf[i]-ver[0],verPfX[i],verPfY[i],obj[i][0].Pt(),obj[i][0].Eta(),obj[i][0].Phi()]) #Add in dZ, dX, dY, Particle Pt, Eta, & Phi, last 3 features to be scaled later
+			if obj[i][1]==22 or obj[i][1]==130:
+				seedParticle.extend([0.0,verPfX[i],verPfY[i],obj[i][0].Pt(),obj[i][0].Eta(),obj[i][0].Phi()]) #Add in dZ, dX, dY, Particle Pt, Eta, & Phi, last 3 features to be scaled later
+			else:
+				seedParticle.extend([ver[0]-verPf[i],verPfX[i],verPfY[i],obj[i][0].Pt(),obj[i][0].Eta(),obj[i][0].Phi()]) #Add in dZ, dX, dY, Particle Pt, Eta, & Phi, last 3 features to be scaled later
 			jetPartList.extend(seedParticle) #Add particle features to particle list
 			bannedParts.append(i) #Mark this particle as unavailable for other jets
 			for j in range(len(obj)):
@@ -109,7 +112,10 @@ for entryNum in range(eventNum):
 				if obj[i][0].DeltaR(obj[j][0])<=0.4 and i!=j and (j not in bannedParts): #Look for available particles within deltaR<0.4 of seed particle
 					tempTLV=tempTLV+obj[j][0] #Add to tempTLV
 					scalePartType(partFts,obj[j][1]) #One-Hot Encoding Particle Type
-					partFts.extend([verPf[j]-ver[0],verPfX[j],verPfY[j],obj[j][0].Pt(),obj[j][0].Eta(),obj[j][0].Phi()]) #Add in dZ, dX, dY, Particle Pt, Eta, & Phi, last 3 features to be scaled later
+					if obj[j][1]==22 or obj[j][1]==130:
+						partFts.extend([0.0,verPfX[j],verPfY[j],obj[j][0].Pt(),obj[j][0].Eta(),obj[j][0].Phi()]) #Add in dZ, dX, dY, Particle Pt, Eta, & Phi, last 3 features to be scaled later
+					else:
+						partFts.extend([ver[0]-verPf[j],verPfX[j],verPfY[j],obj[j][0].Pt(),obj[j][0].Eta(),obj[j][0].Phi()])
 					jetPartList.extend(partFts)  #Add particle features to particle list
 					bannedParts.append(j) #Mark this particle as unavailable for other jets
 				if len(jetPartList)>=10*14: #If you reach 10 particles in one jet, break and move on
@@ -120,9 +126,9 @@ for entryNum in range(eventNum):
 			c = 11
 			while c<len(jetPartList)-2:
 				jetPartList[c]=jetPartList[c]/tempTLV.Pt()
-				jetPartList[c+1]=jetPartList[c+1]-tempTLV.Eta()
+				jetPartList[c+1]=tempTLV.Eta()-jetPartList[c+1]
 				tempPhi = jetPartList[c+2]
-				jetPartList[c+2] = signedDeltaPhi(tempPhi,tempTLV.Phi())
+				jetPartList[c+2] = signedDeltaPhi(tempTLV.Phi(),tempPhi)
 				c+=14
 			#Ensure all inputs are same length			
 			while len(jetPartList)<10*14:
